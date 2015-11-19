@@ -1,7 +1,6 @@
 package main
 
 import (
-	"./vcs/git"
 	"bufio"
 	"errors"
 	"fmt"
@@ -10,18 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"./vcs"
+	_ "./vcs/git"
 )
-
-type Bundle struct {
-	Id   string
-	Path string
-	Url  string
-}
-
-type Vcs interface {
-	Install(string, string) error
-	Update(string, string) error
-}
 
 func init() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
@@ -30,7 +21,7 @@ func init() {
 	}
 }
 
-func parseLine(line []byte) (Vcs, *Bundle, error) {
+func parseLine(line []byte) (vcs.Cmd, *vcs.Bundle, error) {
 	items := strings.SplitN(string(line), "\t", 4)
 	if len(items) != 4 {
 		return nil, nil, errors.New("Too few arguments.")
@@ -39,21 +30,18 @@ func parseLine(line []byte) (Vcs, *Bundle, error) {
 
 	log.Printf("Given type is `%s'\n", vcsName)
 
-	var vcs Vcs
-	switch vcsName {
-	case "git":
-		vcs = git.NewGit()
-	default:
+	vcscmd := vcs.Command(vcsName)
+	if vcscmd == nil {
 		return nil, nil, fmt.Errorf("Unknown version control system name: ", vcsName)
 	}
 
-	bundle := &Bundle{
+	bundle := &vcs.Bundle{
 		Id:   id,
 		Url:  url,
 		Path: path,
 	}
 
-	return vcs, bundle, nil
+	return vcscmd, bundle, nil
 }
 
 func isDirectory(path string) bool {
@@ -70,13 +58,13 @@ func main() {
 
 	in := bufio.NewScanner(os.Stdin)
 	for in.Scan() {
-		vcs, bundle, err := parseLine(in.Bytes())
+		vcscmd, bundle, err := parseLine(in.Bytes())
 		if err != nil {
 			log.Panic(err)
 		}
 
 		wg.Add(1)
-		go func(vcs Vcs, bundle *Bundle) {
+		go func(vcscmd vcs.Cmd, bundle *vcs.Bundle) {
 			defer func() {
 				fmt.Printf("%s\t<FINISH>\n", bundle.Id)
 				wg.Done()
@@ -84,17 +72,17 @@ func main() {
 
 			fmt.Printf("%s\t<START>\n", bundle.Id)
 			if isDirectory(bundle.Path) {
-				err := vcs.Update(bundle.Url, bundle.Path)
+				err := vcscmd.Update(bundle)
 				if err != nil {
 					fmt.Printf("%s\t<ERROR>\t%v\n", bundle.Id, strings.Replace(err.Error(), "\n", "\\n", -1))
 				}
 			} else {
-				err := vcs.Install(bundle.Url, bundle.Path)
+				err := vcscmd.Install(bundle)
 				if err != nil {
 					fmt.Printf("%s\t<ERROR>\t%v\n", bundle.Id, strings.Replace(err.Error(), "\n", "\\n", -1))
 				}
 			}
-		}(vcs, bundle)
+		}(vcscmd, bundle)
 	}
 	wg.Wait()
 }
